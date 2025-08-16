@@ -1,0 +1,23 @@
+{
+  "name": "ai-insights-web",
+  "version": "1.0.0",
+  "description": "AI Insights Platform Web Application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "echo 'Build completed'",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.2",
+    "helmet": "^7.1.0",
+    "cors": "^2.8.5",
+    "morgan": "^1.10.0",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1"
+  },
+  "keywords": ["ai", "insights", "mcp", "analytics"],
+  "author": "AI Insights Team",
+  "license": "MIT"
+}

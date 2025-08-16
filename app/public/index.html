@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Insights Platform</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@heroicons/react@2.0.18/24/outline/index.css" rel="stylesheet">
+    <style>
+        .chat-bubble {
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .user-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .ai-bubble {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .query-container {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .results-table {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800 mb-2">AI Insights Platform</h1>
+            <p class="text-gray-600">Ask questions about your data in natural language</p>
+        </div>
+
+        <!-- Query Interface -->
+        <div class="query-container rounded-lg shadow-lg p-6 mb-6 text-white">
+            <div class="flex items-center space-x-4">
+                <div class="flex-1">
+                    <input 
+                        type="text" 
+                        id="queryInput"
+                        placeholder="Ask a question about your data (e.g., 'What are our top selling products?')"
+                        class="w-full px-4 py-3 rounded-lg text-gray-800 focus:outline-none focus:ring-2 focus:ring-white focus:ring-opacity-50"
+                        maxlength="500"
+                    />
+                </div>
+                <button 
+                    id="queryButton"
+                    class="bg-white text-purple-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-100 transition duration-200 flex items-center space-x-2"
+                >
+                    <span>Ask AI</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div id="loadingState" class="hidden text-center py-8">
+            <div class="loading-spinner mx-auto mb-4"></div>
+            <p class="text-gray-600">AI is analyzing your question...</p>
+        </div>
+
+        <!-- Results Container -->
+        <div id="resultsContainer" class="space-y-6">
+            <!-- Chat messages will be inserted here -->
+        </div>
+
+        <!-- Schema Information -->
+        <div class="mt-8">
+            <button 
+                id="schemaToggle"
+                class="bg-gray-200 hover:bg-gray-300 px-4 py-2 rounded-lg font-medium text-gray-700 transition duration-200"
+            >
+                Show Database Schema
+            </button>
+            <div id="schemaContainer" class="hidden mt-4 bg-white rounded-lg shadow p-6">
+                <h3 class="text-lg font-semibold mb-4">Database Schema</h3>
+                <div id="schemaContent">Loading...</div>
+            </div>
+        </div>
+
+        <!-- Sample Questions -->
+        <div class="mt-8 bg-white rounded-lg shadow p-6">
+            <h3 class="text-lg font-semibold mb-4">Sample Questions</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <button class="sample-question text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition duration-200">
+                    What are our total sales by month?
+                </button>
+                <button class="sample-question text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition duration-200">
+                    Which customers have the highest revenue?
+                </button>
+                <button class="sample-question text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition duration-200">
+                    What are our top selling products by category?
+                </button>
+                <button class="sample-question text-left p-3 bg-gray-50 hover:bg-gray-100 rounded-lg transition duration-200">
+                    Show sales performance by region
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        let conversationHistory = [];
+        let schemaData = null;
+
+        // DOM elements
+        const queryInput = document.getElementById('queryInput');
+        const queryButton = document.getElementById('queryButton');
+        const loadingState = document.getElementById('loadingState');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const schemaToggle = document.getElementById('schemaToggle');
+        const schemaContainer = document.getElementById('schemaContainer');
+        const schemaContent = document.getElementById('schemaContent');
+        const sampleQuestions = document.querySelectorAll('.sample-question');
+
+        // Event listeners
+        queryButton.addEventListener('click', handleQuery);
+        queryInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleQuery();
+        });
+        schemaToggle.addEventListener('click', toggleSchema);
+        sampleQuestions.forEach(btn => {
+            btn.addEventListener('click', () => {
+                queryInput.value = btn.textContent.trim();
+                handleQuery();
+            });
+        });
+
+        // Main query handler
+        async function handleQuery() {
+            const question = queryInput.value.trim();
+            if (!question) return;
+
+            // Add user message to conversation
+            addMessage('user', question);
+            
+            // Show loading state
+            setLoading(true);
+            
+            try {
+                const response = await fetch('/api/query', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ question })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Add AI response to conversation
+                    addMessage('ai', data.explanation, data.sql_query, data.results);
+                    conversationHistory.push({ question, response: data });
+                } else {
+                    addMessage('ai', `Error: ${data.error || 'Something went wrong'}`, null, null, true);
+                }
+            } catch (error) {
+                console.error('Query error:', error);
+                addMessage('ai', 'Sorry, I encountered an error while processing your request. Please try again.', null, null, true);
+            } finally {
+                setLoading(false);
+                queryInput.value = '';
+            }
+        }
+
+        // Add message to conversation
+        function addMessage(type, content, sqlQuery = null, results = null, isError = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${type === 'user' ? 'justify-end' : 'justify-start'} mb-4`;
+
+            const bubbleClass = type === 'user' ? 'user-bubble' : (isError ? 'bg-red-500' : 'ai-bubble');
+            
+            let messageContent = `
+                <div class="chat-bubble ${bubbleClass} text-white p-4 rounded-lg shadow-lg">
+                    <div class="font-medium mb-1">${type === 'user' ? 'You' : 'AI Assistant'}</div>
+                    <div>${content}</div>
+                </div>
+            `;
+
+            // Add SQL query and results for AI responses
+            if (type === 'ai' && sqlQuery && results && !isError) {
+                messageContent += `
+                    <div class="mt-4 space-y-4">
+                        <div class="bg-gray-800 text-green-400 p-4 rounded-lg font-mono text-sm">
+                            <div class="text-gray-300 mb-2">Generated SQL:</div>
+                            <div>${escapeHtml(sqlQuery)}</div>
+                        </div>
+                        ${renderResults(results)}
+                    </div>
+                `;
+            }
+
+            messageDiv.innerHTML = messageContent;
+            resultsContainer.appendChild(messageDiv);
+            
+            // Scroll to bottom
+            messageDiv.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Render query results as a table
+        function renderResults(results) {
+            if (!results || results.length === 0) {
+                return '<div class="bg-yellow-100 text-yellow-800 p-4 rounded-lg">No results found</div>';
+            }
+
+            const headers = Object.keys(results[0]);
+            const maxRows = Math.min(results.length, 10); // Limit display to 10 rows
+            
+            let tableHtml = `
+                <div class="results-table rounded-lg p-4 border">
+                    <div class="mb-2 text-sm text-gray-600">
+                        Showing ${maxRows} of ${results.length} results
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b-2 border-gray-200">
+            `;
+            
+            headers.forEach(header => {
+                tableHtml += `<th class="text-left p-2 font-semibold text-gray-700">${escapeHtml(header)}</th>`;
+            });
+            
+            tableHtml += '</tr></thead><tbody>';
+            
+            for (let i = 0; i < maxRows; i++) {
+                const row = results[i];
+                tableHtml += '<tr class="border-b border-gray-100 hover:bg-gray-50">';
+                headers.forEach(header => {
+                    const value = row[header];
+                    const displayValue = value !== null && value !== undefined ? String(value) : '';
+                    tableHtml += `<td class="p-2">${escapeHtml(displayValue)}</td>`;
+                });
+                tableHtml += '</tr>';
+            }
+            
+            tableHtml += '</tbody></table></div></div>';
+            
+            return tableHtml;
+        }
+
+        // Toggle schema visibility
+        async function toggleSchema() {
+            if (schemaContainer.classList.contains('hidden')) {
+                schemaContainer.classList.remove('hidden');
+                schemaToggle.textContent = 'Hide Database Schema';
+                
+                if (!schemaData) {
+                    await loadSchema();
+                }
+            } else {
+                schemaContainer.classList.add('hidden');
+                schemaToggle.textContent = 'Show Database Schema';
+            }
+        }
+
+        // Load database schema
+        async function loadSchema() {
+            try {
+                const response = await fetch('/api/schema');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    schemaData = data;
+                    renderSchema(data);
+                } else {
+                    schemaContent.innerHTML = `<p class="text-red-600">Error loading schema: ${data.error}</p>`;
+                }
+            } catch (error) {
+                console.error('Schema error:', error);
+                schemaContent.innerHTML = '<p class="text-red-600">Error loading schema</p>';
+            }
+        }
+
+        // Render schema information
+        function renderSchema(schema) {
+            let schemaHtml = '<div class="space-y-6">';
+            
+            schema.tables.forEach(table => {
+                schemaHtml += `
+                    <div class="border rounded-lg p-4">
+                        <h4 class="font-semibold text-lg mb-2">${table.name}</h4>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <h5 class="font-medium mb-2">Columns:</h5>
+                                <ul class="text-sm space-y-1">
+                `;
+                
+                table.columns.forEach(col => {
+                    schemaHtml += `
+                        <li class="flex justify-between">
+                            <span>${col.name}</span>
+                            <span class="text-gray-500">${col.type}</span>
+                        </li>
+                    `;
+                });
+                
+                schemaHtml += `
+                                </ul>
+                            </div>
+                            <div>
+                                <h5 class="font-medium mb-2">Sample Data:</h5>
+                                <div class="text-sm text-gray-600">
+                `;
+                
+                if (table.sample_data && table.sample_data.length > 0) {
+                    const sampleRow = table.sample_data[0];
+                    Object.entries(sampleRow).slice(0, 3).forEach(([key, value]) => {
+                        const displayValue = value !== null ? String(value).substring(0, 20) : 'null';
+                        schemaHtml += `<div>${key}: ${escapeHtml(displayValue)}</div>`;
+                    });
+                } else {
+                    schemaHtml += '<div>No sample data available</div>';
+                }
+                
+                schemaHtml += `
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            schemaHtml += '</div>';
+            schemaContent.innerHTML = schemaHtml;
+        }
+
+        // Set loading state
+        function setLoading(isLoading) {
+            if (isLoading) {
+                queryButton.disabled = true;
+                queryButton.innerHTML = '<div class="loading-spinner"></div>';
+                loadingState.classList.remove('hidden');
+            } else {
+                queryButton.disabled = false;
+                queryButton.innerHTML = '<span>Ask AI</span>';
+                loadingState.classList.add('hidden');
+            }
+        }
+
+        // Utility function to escape HTML
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Initialize app
+        console.log('AI Insights Platform loaded');
+    </script>
+</body>
+</html>
