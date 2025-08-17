@@ -309,9 +309,9 @@ Answer: """
             # Ensure LIMIT is present
             if 'LIMIT' not in sql_query.upper():
                 if sql_query.endswith(';'):
-                    sql_query = sql_query[:-1] + ' LIMIT 5;'
+                    sql_query = sql_query[:-1] + ' LIMIT 25;'
                 else:
-                    sql_query += ' LIMIT 5'
+                    sql_query += ' LIMIT 25'
 
             logger.info(f"Generated SQL query: {sql_query}")
             return sql_query

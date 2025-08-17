@@ -9,6 +9,8 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 1);
+
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8001';
 const ANALYTICS_URL = process.env.ANALYTICS_URL || 'http://analytics:8002';
 
@@ -69,7 +71,7 @@ app.post('/api/query', [
             question,
             context: {}
         }, {
-            timeout: 30000
+            timeout: 60000
         });
 
         res.json(response.data);
@@ -112,60 +114,78 @@ app.get('/api/schema', async (req, res) => {
     }
 });
 
-app.post('/api/analyze', [
-    body('data').isArray({ min: 1 }).withMessage('Data must be a non-empty array'),
-    body('query_context').optional().isString()
-], async (req, res) => {
+// ENHANCED ANALYTICS ROUTE WITH DETAILED INSIGHTS
+app.post('/api/analyze', async (req, res) => {
+    console.log('Analytics request received');
+    
+    if (!req.body || !req.body.results || !Array.isArray(req.body.results)) {
+        return res.status(400).json({ error: 'Invalid request: results array required' });
+    }
+
     try {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
-
-        const { data, query_context } = req.body;
-        console.log(`Processing analytics for ${data.length} rows`);
-
-        // Parse query context to extract query and SQL
-        let query = "Unknown query";
-        let sql = "Unknown SQL";
+        const { results, query, sql } = req.body;
         
-        if (query_context) {
-            const lines = query_context.split('\n');
-            const queryLine = lines.find(line => line.startsWith('Query: '));
-            const sqlLine = lines.find(line => line.startsWith('SQL: '));
-            
-            if (queryLine) query = queryLine.replace('Query: ', '');
-            if (sqlLine) sql = sqlLine.replace('SQL: ', '');
-        }
-
-        // Format data for analytics service
         const analyticsRequest = {
             query: query,
             sql: sql,
-            results: data
+            results: results
         };
 
-        const response = await axios.post(`${ANALYTICS_URL}/analyze`, analyticsRequest, {
-            timeout: 60000 // Analytics might take longer
+        console.log(`Analyzing ${results.length} rows...`);
+
+        const response = await fetch('http://analytics:8002/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(analyticsRequest)
         });
 
-        res.json(response.data);
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('Analytics service error:', response.status, error);
+            return res.status(500).json({ error: 'Analytics service failed' });
+        }
+
+        const result = await response.json();
+        console.log(`Analysis complete: ${result.insights.length} insights generated`);
+
+        console.log('Raw analytics result:', JSON.stringify(result, null, 2));
+
+        // ENHANCED: Transform response with detailed insight data
+        const frontendResponse = {
+            data_profile: {
+                data_type: result.data_type,
+                row_count: result.metadata.row_count,
+                column_count: result.metadata.column_count
+            },
+            insights: result.insights.map(insight => {
+                const title = insight.title || insight.name || 'Insight';
+                const description = insight.description || insight.message || 'No description available';
+                const severity = insight.severity || 'info';
+                const type = insight.type || 'general';
+                
+                return {
+                    message: `${title}: ${description}`,
+                    title: title,
+                    description: description, 
+                    severity: severity === 'opportunity' ? 'info' : severity,
+                    type: type,
+                    data: insight.data || {} // Pass through detailed data for display
+                };
+            }),
+            recommendations: result.insights
+                .filter(i => i.severity === 'opportunity')
+                .map(i => i.description || i.message || 'No recommendation'),
+            summary: result.summary
+        };
+
+        res.json(frontendResponse);
+
     } catch (error) {
         console.error('Analytics error:', error.message);
-        if (error.response) {
-            console.error('Analytics service response:', error.response.data);
-            res.status(error.response.status).json({
-                error: error.response.data.detail || 'Analytics service error'
-            });
-        } else if (error.code === 'ECONNREFUSED') {
-            res.status(503).json({
-                error: 'Analytics service is currently unavailable. Please try again later.'
-            });
-        } else {
-            res.status(500).json({
-                error: 'An unexpected error occurred during analysis. Please try again.'
-            });
-        }
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message
+        });
     }
 });
 
