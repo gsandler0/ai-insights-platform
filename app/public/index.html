@@ -32,6 +32,56 @@
             height: 24px;
             animation: spin 1s linear infinite;
         }
+        .analyze-btn {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            transition: all 0.2s;
+        }
+        .analyze-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+        }
+        .analyze-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .analytics-container {
+            background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+            border: 1px solid #cbd5e1;
+        }
+        .insight-card {
+            transition: transform 0.2s;
+            border-left: 4px solid transparent;
+        }
+        .insight-card:hover {
+            transform: translateY(-2px);
+        }
+        .insight-card.severity-warning {
+            border-left-color: #f59e0b;
+            background-color: #fef3c7;
+        }
+        .insight-card.severity-critical {
+            border-left-color: #dc2626;
+            background-color: #fee2e2;
+        }
+        .insight-card.severity-opportunity {
+            border-left-color: #059669;
+            background-color: #d1fae5;
+        }
+        .insight-card.severity-info {
+            border-left-color: #3b82f6;
+            background-color: #dbeafe;
+        }
+        .column-tag {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            color: white;
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -116,6 +166,8 @@
         // Global variables
         let conversationHistory = [];
         let schemaData = null;
+        window.resultsData = {}; // Store results data for analytics
+        window.queryContextData = {}; // Store query context for analytics
 
         // DOM elements
         const queryInput = document.getElementById('queryInput');
@@ -139,6 +191,22 @@
                 handleQuery();
             });
         });
+
+        // Setup analytics event listeners (using event delegation)
+        function setupAnalyticsEventListeners() {
+            document.addEventListener('click', function(e) {
+                if (e.target.closest('.analyze-results-btn')) {
+                    const button = e.target.closest('.analyze-results-btn');
+                    const resultId = button.getAttribute('data-result-id');
+                    
+                    if (button.textContent.includes('Hide Analysis')) {
+                        hideAnalysis(resultId);
+                    } else {
+                        analyzeResults(resultId);
+                    }
+                }
+            });
+        }
 
         // Main query handler
         async function handleQuery() {
@@ -164,7 +232,7 @@
 
                 if (response.ok) {
                     // Add AI response to conversation
-                    addMessage('ai', data.explanation, data.sql_query, data.results);
+                    addMessage('ai', data.explanation, data.sql_query, data.results, false, question);
                     conversationHistory.push({ question, response: data });
                 } else {
                     addMessage('ai', `Error: ${data.error || 'Something went wrong'}`, null, null, true);
@@ -179,7 +247,7 @@
         }
 
         // Add message to conversation
-        function addMessage(type, content, sqlQuery = null, results = null, isError = false) {
+        function addMessage(type, content, sqlQuery = null, results = null, isError = false, originalQuestion = null) {
             const messageDiv = document.createElement('div');
             messageDiv.className = `flex ${type === 'user' ? 'justify-end' : 'justify-start'} mb-4`;
 
@@ -200,7 +268,7 @@
                             <div class="text-gray-300 mb-2">Generated SQL:</div>
                             <div>${escapeHtml(sqlQuery)}</div>
                         </div>
-                        ${renderResults(results)}
+                        ${renderResults(results, sqlQuery, originalQuestion)}
                     </div>
                 `;
             }
@@ -212,32 +280,46 @@
             messageDiv.scrollIntoView({ behavior: 'smooth' });
         }
 
-        // Render query results as a table
-        function renderResults(results) {
+        // Render query results as a table with analytics button
+        function renderResults(results, sqlQuery = null, originalQuestion = null) {
             if (!results || results.length === 0) {
                 return '<div class="bg-yellow-100 text-yellow-800 p-4 rounded-lg">No results found</div>';
             }
 
             const headers = Object.keys(results[0]);
-            const maxRows = Math.min(results.length, 10); // Limit display to 10 rows
-            
+            const maxRows = Math.min(results.length, 100);
+            const resultId = 'result_' + Date.now(); // Unique ID for this result set
+
             let tableHtml = `
                 <div class="results-table rounded-lg p-4 border">
-                    <div class="mb-2 text-sm text-gray-600">
-                        Showing ${maxRows} of ${results.length} results
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="text-sm text-gray-600">
+                            Showing ${maxRows} of ${results.length} results
+                        </div>
+                        <button 
+                            id="analyzeBtn_${resultId}"
+                            data-result-id="${resultId}"
+                            class="analyze-btn analyze-results-btn text-white px-4 py-2 rounded-lg font-medium text-sm flex items-center space-x-2"
+                        >
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            <span>Analyze Results</span>
+                        </button>
                     </div>
+                    
                     <div class="overflow-x-auto">
                         <table class="w-full text-sm">
                             <thead>
                                 <tr class="border-b-2 border-gray-200">
             `;
-            
+
             headers.forEach(header => {
                 tableHtml += `<th class="text-left p-2 font-semibold text-gray-700">${escapeHtml(header)}</th>`;
             });
-            
+
             tableHtml += '</tr></thead><tbody>';
-            
+
             for (let i = 0; i < maxRows; i++) {
                 const row = results[i];
                 tableHtml += '<tr class="border-b border-gray-100 hover:bg-gray-50">';
@@ -248,10 +330,280 @@
                 });
                 tableHtml += '</tr>';
             }
-            
-            tableHtml += '</tbody></table></div></div>';
-            
+
+            tableHtml += `
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Analytics container (initially hidden) -->
+                    <div id="analytics_${resultId}" class="hidden">
+                        <!-- Analytics results will be inserted here -->
+                    </div>
+                </div>
+            `;
+
+            // Store results data and context for analytics
+            window.resultsData[resultId] = results;
+            window.queryContextData[resultId] = {
+                query: originalQuestion || "Data analysis request",
+                sql: sqlQuery || "Unknown SQL"
+            };
+
             return tableHtml;
+        }
+
+        // Update analyze button state
+        function updateAnalyzeButton(resultId, state) {
+            const analyzeBtn = document.getElementById(`analyzeBtn_${resultId}`);
+            
+            switch(state) {
+                case 'loading':
+                    analyzeBtn.disabled = true;
+                    analyzeBtn.innerHTML = `
+                        <div class="loading-spinner"></div>
+                        <span>Analyzing...</span>
+                    `;
+                    break;
+                    
+                case 'hide':
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.innerHTML = `
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.878 9.878L8.464 8.464M9.878 9.878l-6.415-6.414"></path>
+                        </svg>
+                        <span>Hide Analysis</span>
+                    `;
+                    break;
+                    
+                case 'analyze':
+                default:
+                    analyzeBtn.disabled = false;
+                    analyzeBtn.innerHTML = `
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                        </svg>
+                        <span>Analyze Results</span>
+                    `;
+                    break;
+            }
+        }
+
+        // Analyze results function
+        async function analyzeResults(resultId) {
+            const results = window.resultsData[resultId];
+            const queryContext = window.queryContextData[resultId];
+            
+            if (!results) {
+                console.error('Results data not found for ID:', resultId);
+                return;
+            }
+
+            const analyticsContainer = document.getElementById(`analytics_${resultId}`);
+
+            // Set loading state
+            updateAnalyzeButton(resultId, 'loading');
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        query: queryContext?.query || "Data analysis request",
+                        sql: queryContext?.sql || "Unknown SQL",
+                        results: results
+                    })
+                });
+
+                const analyticsData = await response.json();
+
+                console.log('Raw analytics data:', JSON.stringify(analyticsData, null, 2));
+
+
+                if (response.ok) {
+                    // Show analytics results
+                    analyticsContainer.innerHTML = renderAnalytics(analyticsData);
+                    analyticsContainer.classList.remove('hidden');
+                    
+                    // Update button to "Hide Analysis"
+                    updateAnalyzeButton(resultId, 'hide');
+                } else {
+                    throw new Error(analyticsData.error || 'Analytics request failed');
+                }
+            } catch (error) {
+                console.error('Analytics error:', error);
+                
+                // Show error state
+                analyticsContainer.innerHTML = `
+                    <div class="analytics-container p-4 mt-4">
+                        <div class="bg-red-100 text-red-700 p-3 rounded-lg">
+                            <strong>Analysis Error:</strong> ${error.message}
+                        </div>
+                    </div>
+                `;
+                analyticsContainer.classList.remove('hidden');
+                
+                // Reset button
+                updateAnalyzeButton(resultId, 'analyze');
+            }
+        }
+
+        // Hide analysis function
+        function hideAnalysis(resultId) {
+            const analyticsContainer = document.getElementById(`analytics_${resultId}`);
+            analyticsContainer.classList.add('hidden');
+            updateAnalyzeButton(resultId, 'analyze');
+        }
+
+        // Render analytics results with enhanced column-specific display
+        // ENHANCED: Render analytics results with detailed insights display
+        function renderAnalytics(analytics) {
+            if (!analytics) {
+                return '<div class="analytics-container p-4 mt-4"><div class="text-gray-500">No analytics data available</div></div>';
+            }
+
+            let analyticsHtml = `
+                <div class="analytics-container p-4 mt-4 rounded-lg">
+                    <h3 class="text-lg font-semibold mb-4 text-gray-800">📊 Data Analysis Results</h3>
+            `;
+
+            // Render summary
+            if (analytics.summary) {
+                analyticsHtml += `
+                    <div class="mb-6 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                        <h4 class="font-medium text-blue-800 mb-2">📋 Summary</h4>
+                        <p class="text-blue-700 text-sm">${escapeHtml(analytics.summary)}</p>
+                    </div>
+                `;
+            }
+
+            // ENHANCED: Render insights with detailed data display
+            if (analytics.insights && analytics.insights.length > 0) {
+                analyticsHtml += `
+                    <div class="mb-6">
+                        <h4 class="font-medium text-gray-700 mb-3">🔍 Key Insights</h4>
+                        <div class="space-y-3">
+                `;
+                
+                analytics.insights.forEach(insight => {
+                    const severityIcons = {
+                        'critical': '🔴',
+                        'warning': '🟡', 
+                        'info': '🔵',
+                        'opportunity': '🟢'
+                    };
+                    const severityClass = `severity-${insight.severity}`;
+                    const icon = severityIcons[insight.severity] || 'ℹ️';
+                    
+                    // Extract column information from insight data
+                    let columnInfo = '';
+                    if (insight.data && insight.data.column) {
+                        columnInfo = `<div class="column-tag">Column: ${escapeHtml(insight.data.column)}</div>`;
+                    }
+                    
+                    analyticsHtml += `
+                        <div class="insight-card p-4 border rounded-lg ${severityClass}">
+                            <div class="flex items-start">
+                                <span class="text-xl mr-3">${icon}</span>
+                                <div class="flex-1">
+                                    ${columnInfo}
+                                    <div class="font-semibold text-gray-800 mb-2">${escapeHtml(insight.title || 'Insight')}</div>
+                                    <div class="text-sm text-gray-700 mb-2">${escapeHtml(insight.description || 'No description')}</div>
+                    `;
+                    
+                    // ENHANCED: Add detailed data if available
+                    if (insight.data && Object.keys(insight.data).length > 0) {
+                        analyticsHtml += '<div class="bg-white bg-opacity-70 p-3 rounded mt-2 border">';
+                        
+                        // Handle outliers specifically
+                        if (insight.type === 'anomaly' && insight.data.outliers && insight.data.outliers.length > 0) {
+                            const formattedOutliers = insight.data.outliers.map(v => {
+                                if (typeof v === 'number') {
+                                    return v.toLocaleString();
+                                }
+                                return String(v);
+                            }).join(', ');
+                            
+                            analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                <strong>🎯 Outlier Values:</strong> ${formattedOutliers}
+                            </div>`;
+                            
+                            if (insight.data.normal_range) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>📏 Normal Range:</strong> ${insight.data.normal_range.lower.toFixed(2)} to ${insight.data.normal_range.upper.toFixed(2)}
+                                </div>`;
+                            }
+                        }
+                        
+                        // Handle trends
+                        if (insight.type === 'trend') {
+                            if (insight.data.min_value !== undefined && insight.data.max_value !== undefined) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>📈 Value Range:</strong> ${insight.data.min_value.toLocaleString()} to ${insight.data.max_value.toLocaleString()}
+                                </div>`;
+                            }
+                            if (insight.data.avg_value !== undefined) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>📊 Average:</strong> ${insight.data.avg_value.toLocaleString()}
+                                </div>`;
+                            }
+                            if (insight.data.strength !== undefined) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>💪 Trend Strength:</strong> ${insight.data.strength.toFixed(1)}%
+                                </div>`;
+                            }
+                        }
+                        
+                        // Handle data quality issues
+                        if (insight.type === 'data_quality') {
+                            if (insight.data.affected_records !== undefined) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>📋 Affected Records:</strong> ${insight.data.affected_records.toLocaleString()}
+                                </div>`;
+                            }
+                            if (insight.data.null_percentage !== undefined) {
+                                analyticsHtml += `<div class="text-sm text-gray-600 mb-1">
+                                    <strong>❌ Missing Data:</strong> ${insight.data.null_percentage.toFixed(1)}%
+                                </div>`;
+                            }
+                        }
+                        
+                        analyticsHtml += '</div>'; // close details box
+                    }
+                    
+                    analyticsHtml += '</div></div></div>'; // close content, flex, and insight-card
+                });
+
+                analyticsHtml += '</div></div>';
+            }
+
+            // Render data profile
+            if (analytics.data_profile) {
+                analyticsHtml += `
+                    <div>
+                        <h4 class="font-medium text-gray-700 mb-3">📈 Data Profile</h4>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                            <div class="bg-white p-3 rounded border">
+                                <div class="font-medium text-gray-600">Data Type</div>
+                                <div class="text-lg">${escapeHtml(analytics.data_profile.data_type || 'Unknown')}</div>
+                            </div>
+                            <div class="bg-white p-3 rounded border">
+                                <div class="font-medium text-gray-600">Total Records</div>
+                                <div class="text-lg">${(analytics.data_profile.row_count || 0).toLocaleString()}</div>
+                            </div>
+                            <div class="bg-white p-3 rounded border">
+                                <div class="font-medium text-gray-600">Columns Analyzed</div>
+                                <div class="text-lg">${analytics.data_profile.column_count || 0}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            analyticsHtml += '</div>';
+            return analyticsHtml;
         }
 
         // Toggle schema visibility
@@ -362,11 +714,12 @@
                 '"': '&quot;',
                 "'": '&#039;'
             };
-            return text.replace(/[&<>"']/g, m => map[m]);
+            return String(text).replace(/[&<>"']/g, m => map[m]);
         }
 
         // Initialize app
-        console.log('AI Insights Platform loaded');
+        setupAnalyticsEventListeners();
+        console.log('AI Insights Platform loaded with enhanced analytics support');
     </script>
 </body>
 </html>

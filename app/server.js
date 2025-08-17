@@ -9,7 +9,10 @@ const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 1);
+
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8001';
+const ANALYTICS_URL = process.env.ANALYTICS_URL || 'http://analytics:8002';
 
 // Security middleware
 app.use(helmet({
@@ -62,21 +65,18 @@ app.post('/api/query', [
         }
 
         const { question } = req.body;
-        
         console.log(`Processing query: ${question}`);
-        
+
         const response = await axios.post(`${MCP_SERVER_URL}/query`, {
             question,
             context: {}
         }, {
-            timeout: 30000
+            timeout: 60000
         });
-        
+
         res.json(response.data);
-        
     } catch (error) {
         console.error('Query error:', error.message);
-        
         if (error.response) {
             res.status(error.response.status).json({
                 error: error.response.data.detail || 'Server error'
@@ -98,12 +98,10 @@ app.get('/api/schema', async (req, res) => {
         const response = await axios.get(`${MCP_SERVER_URL}/schema`, {
             timeout: 10000
         });
-        
+
         res.json(response.data);
-        
     } catch (error) {
         console.error('Schema error:', error.message);
-        
         if (error.response) {
             res.status(error.response.status).json({
                 error: error.response.data.detail || 'Server error'
@@ -113,6 +111,81 @@ app.get('/api/schema', async (req, res) => {
                 error: 'Could not retrieve database schema'
             });
         }
+    }
+});
+
+// ENHANCED ANALYTICS ROUTE WITH DETAILED INSIGHTS
+app.post('/api/analyze', async (req, res) => {
+    console.log('Analytics request received');
+    
+    if (!req.body || !req.body.results || !Array.isArray(req.body.results)) {
+        return res.status(400).json({ error: 'Invalid request: results array required' });
+    }
+
+    try {
+        const { results, query, sql } = req.body;
+        
+        const analyticsRequest = {
+            query: query,
+            sql: sql,
+            results: results
+        };
+
+        console.log(`Analyzing ${results.length} rows...`);
+
+        const response = await fetch('http://analytics:8002/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(analyticsRequest)
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            console.error('Analytics service error:', response.status, error);
+            return res.status(500).json({ error: 'Analytics service failed' });
+        }
+
+        const result = await response.json();
+        console.log(`Analysis complete: ${result.insights.length} insights generated`);
+
+        console.log('Raw analytics result:', JSON.stringify(result, null, 2));
+
+        // ENHANCED: Transform response with detailed insight data
+        const frontendResponse = {
+            data_profile: {
+                data_type: result.data_type,
+                row_count: result.metadata.row_count,
+                column_count: result.metadata.column_count
+            },
+            insights: result.insights.map(insight => {
+                const title = insight.title || insight.name || 'Insight';
+                const description = insight.description || insight.message || 'No description available';
+                const severity = insight.severity || 'info';
+                const type = insight.type || 'general';
+                
+                return {
+                    message: `${title}: ${description}`,
+                    title: title,
+                    description: description, 
+                    severity: severity === 'opportunity' ? 'info' : severity,
+                    type: type,
+                    data: insight.data || {} // Pass through detailed data for display
+                };
+            }),
+            recommendations: result.insights
+                .filter(i => i.severity === 'opportunity')
+                .map(i => i.description || i.message || 'No recommendation'),
+            summary: result.summary
+        };
+
+        res.json(frontendResponse);
+
+    } catch (error) {
+        console.error('Analytics error:', error.message);
+        res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.message
+        });
     }
 });
 

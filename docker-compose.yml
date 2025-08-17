@@ -133,6 +133,26 @@ services:
       - ai-insights-network
     restart: unless-stopped
 
+  # Analytics Service - MOVED INSIDE services section
+  analytics:
+    build:
+      context: ./analytics
+      dockerfile: Dockerfile
+    container_name: ai-insights-analytics
+    ports:
+      - "8002:8002"
+    environment:
+      - DATABASE_URL=postgresql://insights_user:insights_password_2024@postgres:5432/insights_db
+      - OLLAMA_URL=http://ollama:11434
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - ai-insights-network
+    restart: unless-stopped
+
 networks:
   ai-insights-network:
     driver: bridge

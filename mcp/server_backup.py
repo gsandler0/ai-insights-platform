@@ -7,10 +7,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 import psycopg2
-from mcp.server import Server, NotificationOptions
-from mcp.server.models import InitializationOptions
-import mcp.server.stdio
-import mcp.types as types
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
@@ -29,8 +27,21 @@ logger = logging.getLogger(__name__)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://insights_user:insights_password_2024@postgres:5432/insights_db")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 
-# Initialize MCP Server
-server = Server("ai-insights-mcp")
+# Initialize FastAPI app
+app = FastAPI(
+    title="AI Insights MCP Server",
+    description="Model Context Protocol server for AI-powered data insights",
+    version="1.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Database connection
 try:
@@ -40,7 +51,7 @@ except Exception as e:
     logger.error(f"Failed to connect to database: {e}")
     raise
 
-# Pydantic models (keeping for internal use)
+# Pydantic models
 class QueryRequest(BaseModel):
     question: str
     context: Optional[Dict[str, Any]] = None
@@ -51,13 +62,17 @@ class QueryResponse(BaseModel):
     explanation: str
     metadata: Dict[str, Any]
 
+class SchemaInfo(BaseModel):
+    tables: List[Dict[str, Any]]
+    relationships: List[Dict[str, Any]]
+
 # Database schema cache
 _schema_cache = None
 _schema_cache_time = None
 SCHEMA_CACHE_TTL = 3600  # 1 hour
 
 async def get_database_schema() -> Dict[str, Any]:
-    """Get database schema with caching - UNCHANGED"""
+    """Get database schema with caching"""
     global _schema_cache, _schema_cache_time
 
     current_time = datetime.now().timestamp()
@@ -135,10 +150,10 @@ async def get_database_schema() -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error getting database schema: {e}")
-        raise RuntimeError(f"Database schema error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database schema error: {str(e)}")
 
 async def check_ollama_health() -> bool:
-    """Check if Ollama is running and accessible - UNCHANGED"""
+    """Check if Ollama is running and accessible"""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{OLLAMA_URL}/api/tags")
@@ -152,7 +167,7 @@ async def check_ollama_health() -> bool:
         return False
 
 def create_schema_for_prompt(schema: Dict[str, Any]) -> str:
-    """Create a PostgreSQL CREATE TABLE schema string for the prompt - UNCHANGED"""
+    """Create a PostgreSQL CREATE TABLE schema string for the prompt"""
     schema_sql = ""
     
     for table in schema["tables"]:
@@ -178,47 +193,39 @@ def create_schema_for_prompt(schema: Dict[str, Any]) -> str:
     return schema_sql
 
 async def generate_sql_query(question: str, schema: Dict[str, Any]) -> str:
-    """Generate SQL query using Ollama with improved prompting - UNCHANGED"""
+    """Generate SQL query using Ollama with improved prompting"""
+
     # Check if Ollama is available
     if not await check_ollama_health():
         logger.error("Ollama service is not available")
-        raise RuntimeError("AI service unavailable. Please ensure Ollama is running.")
+        raise HTTPException(status_code=503, detail="AI service unavailable. Please ensure Ollama is running.")
 
     # Create PostgreSQL schema for the prompt
     schema_sql = create_schema_for_prompt(schema)
     
-    # Enhanced prompt with examples for better SQL generation
+    # Enhanced prompt specifically for SQL generation
     prompt = f"""### Instructions:
-You are a SQL expert. Convert the question into a proper PostgreSQL query.
-
-### Rules:
-- Return ONLY the SQL query, no explanations
-- Use proper JOINs when data is in multiple tables
-- Use SUM(), COUNT(), GROUP BY for aggregations
-- Always add LIMIT 5 at the end
-- Use table aliases (c for customers, s for sales_data, etc.)
+Your task is to convert a question into a SQL query, given a PostgreSQL database schema.
+Adhere to these rules:
+- **Only return the SQL query, nothing else**
+- **Use proper PostgreSQL syntax**
+- **Use table aliases to prevent ambiguity**
+- **Always include LIMIT 5 to limit results**
+- **Do not include explanations or comments**
 
 ### Database Schema:
 {schema_sql}
 
-### Examples:
-Question: "What are the total sales by customer?"
-Answer: SELECT c.customer_name, SUM(s.amount) as total_sales FROM customers c JOIN sales_data s ON c.customer_id = s.customer_id GROUP BY c.customer_id, c.customer_name ORDER BY total_sales DESC LIMIT 5;
+### Question:
+Generate a SQL query that answers: "{question}"
 
-Question: "Show me customers"
-Answer: SELECT * FROM customers LIMIT 5;
-
-Question: "Which products sell the most?"
-Answer: SELECT p.product_name, SUM(s.quantity) as total_sold FROM products p JOIN sales_data s ON p.product_name = s.product_name GROUP BY p.product_name ORDER BY total_sold DESC LIMIT 5;
-
-### Your Task:
-Question: "{question}"
-Answer: """
+### Response:
+"""
 
     try:
         logger.info(f"Generating SQL query for: {question}")
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:  # Reduced timeout
             # Get available models and prefer SQL-specific ones
             models_response = await client.get(f"{OLLAMA_URL}/api/tags")
             models_data = models_response.json()
@@ -247,10 +254,10 @@ Answer: """
                 "prompt": prompt,
                 "stream": False,
                 "options": {
-                    "temperature": 0.1,
+                    "temperature": 0.1,  # Low temperature for consistent output
                     "top_p": 0.9,
-                    "num_predict": 200,
-                    "stop": ["###", "Explanation:", "Note:", "\n\n"]
+                    "num_predict": 200,  # Limit response length
+                    "stop": ["###", "Explanation:", "Note:", "\n\n"]  # Stop tokens
                 }
             }
             
@@ -265,18 +272,19 @@ Answer: """
             if response.status_code != 200:
                 error_text = response.text
                 logger.error(f"Ollama request failed: {response.status_code} - {error_text}")
-                raise RuntimeError(f"AI service error: {response.status_code}")
+                raise HTTPException(status_code=500, detail=f"AI service error: {response.status_code}")
             
             result = response.json()
             
             if "response" not in result:
                 logger.error(f"Unexpected Ollama response format: {result}")
-                raise RuntimeError("Invalid AI service response format")
+                raise HTTPException(status_code=500, detail="Invalid AI service response format")
             
             sql_query = result["response"].strip()
             
             if not sql_query:
                 logger.error("Empty response from Ollama")
+                # Fallback to simple query based on question
                 return generate_fallback_query(question, schema)
 
             # Clean up the response
@@ -289,10 +297,10 @@ Answer: """
                 line = line.strip()
                 if not line:
                     continue
-                if line.startswith(('--', '#', '/*')):
+                if line.startswith(('--', '#', '/*')):  # Skip comments
                     continue
                 if any(word in line.lower() for word in ['explanation:', 'note:', 'based on', 'this query']):
-                    break
+                    break  # Stop at explanations
                 sql_lines.append(line)
             
             sql_query = '\n'.join(sql_lines).strip()
@@ -308,10 +316,11 @@ Answer: """
 
             # Ensure LIMIT is present
             if 'LIMIT' not in sql_query.upper():
+                # Insert LIMIT before final semicolon
                 if sql_query.endswith(';'):
-                    sql_query = sql_query[:-1] + ' LIMIT 25;'
+                    sql_query = sql_query[:-1] + ' LIMIT 5;'
                 else:
-                    sql_query += ' LIMIT 25'
+                    sql_query += ' LIMIT 5'
 
             logger.info(f"Generated SQL query: {sql_query}")
             return sql_query
@@ -322,12 +331,14 @@ Answer: """
     except httpx.TimeoutException as e:
         logger.error(f"Timeout connecting to Ollama: {e}")
         return generate_fallback_query(question, schema)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error generating SQL query: {e}")
         return generate_fallback_query(question, schema)
 
 def generate_fallback_query(question: str, schema: Dict[str, Any]) -> str:
-    """Generate a simple fallback query when AI fails - UNCHANGED"""
+    """Generate a simple fallback query when AI fails"""
     logger.info("Using fallback query generation")
     
     question_lower = question.lower()
@@ -360,13 +371,14 @@ def generate_fallback_query(question: str, schema: Dict[str, Any]) -> str:
     return f"SELECT * FROM {best_table} LIMIT 5;"
 
 async def execute_sql_query(sql_query: str) -> List[Dict[str, Any]]:
-    """Execute SQL query safely - UNCHANGED except HTTPException -> RuntimeError"""
+    """Execute SQL query safely"""
+
     # Basic SQL injection protection
     sql_lower = sql_query.lower().strip()
 
     # Only allow SELECT statements
     if not sql_lower.startswith("select"):
-        raise RuntimeError("Only SELECT queries are allowed")
+        raise HTTPException(status_code=400, detail="Only SELECT queries are allowed")
 
     # Block dangerous keywords
     dangerous_keywords = [
@@ -376,7 +388,7 @@ async def execute_sql_query(sql_query: str) -> List[Dict[str, Any]]:
 
     for keyword in dangerous_keywords:
         if keyword in sql_lower:
-            raise RuntimeError(f"Query contains prohibited keyword: {keyword}")
+            raise HTTPException(status_code=400, detail=f"Query contains prohibited keyword: {keyword}")
 
     try:
         with engine.connect() as conn:
@@ -389,7 +401,7 @@ async def execute_sql_query(sql_query: str) -> List[Dict[str, Any]]:
                 for i, column in enumerate(result.keys()):
                     value = row[i]
                     # Handle special types
-                    if hasattr(value, 'isoformat'):
+                    if hasattr(value, 'isoformat'):  # datetime objects
                         value = value.isoformat()
                     elif hasattr(value, '__str__') and not isinstance(value, (str, int, float, bool, type(None))):
                         value = str(value)
@@ -400,126 +412,63 @@ async def execute_sql_query(sql_query: str) -> List[Dict[str, Any]]:
 
     except SQLAlchemyError as e:
         logger.error(f"Database error executing query: {e}")
-        raise RuntimeError(f"Database error: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Database error: {str(e)}")
     except Exception as e:
         logger.error(f"Error executing query: {e}")
-        raise RuntimeError(f"Query execution error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Query execution error: {str(e)}")
 
 async def generate_explanation(question: str, sql_query: str, results: List[Dict[str, Any]]) -> str:
-    """Generate explanation of the query and results with fallback - UNCHANGED"""
+    """Generate explanation of the query and results with fallback"""
+    
+    # Simple fallback explanation to avoid another timeout
     results_summary = f"Query returned {len(results)} rows."
     if results and len(results) > 0:
         columns = list(results[0].keys())
-        results_summary += f" Columns: {', '.join(columns[:3])}"
+        results_summary += f" Columns: {', '.join(columns[:3])}"  # Show first 3 columns
         if len(columns) > 3:
             results_summary += f" and {len(columns)-3} more."
     
     return f"The SQL query successfully retrieved data answering '{question}'. {results_summary}"
 
-# MCP SERVER IMPLEMENTATION
-
-@server.list_resources()
-async def handle_list_resources() -> list[types.Resource]:
-    """List available database resources"""
+# API Routes
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
     try:
-        schema = await get_database_schema()
-        resources = []
+        # Check database
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
         
-        # Add each table as a resource
-        for table in schema["tables"]:
-            resources.append(
-                types.Resource(
-                    uri=f"db://table/{table['name']}",
-                    name=f"Table: {table['name']}",
-                    description=f"Database table with {len(table['columns'])} columns",
-                    mimeType="application/json"
-                )
-            )
+        # Check Ollama
+        ollama_healthy = await check_ollama_health()
         
-        # Add schema overview as a resource
-        resources.append(
-            types.Resource(
-                uri="db://schema",
-                name="Database Schema",
-                description="Complete database schema with table definitions and relationships",
-                mimeType="application/json"
-            )
-        )
-        
-        return resources
+        return {
+            "status": "healthy" if ollama_healthy else "partial",
+            "database": "healthy",
+            "ollama": "healthy" if ollama_healthy else "unhealthy",
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
-        logger.error(f"Error listing resources: {e}")
-        return []
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail="Service unavailable")
 
-@server.read_resource()
-async def handle_read_resource(uri: str) -> str:
-    """Read a specific database resource"""
+@app.get("/schema", response_model=SchemaInfo)
+async def get_schema():
+    """Get database schema information"""
+    schema = await get_database_schema()
+    return SchemaInfo(**schema)
+
+@app.post("/query", response_model=QueryResponse)
+async def query_data(request: QueryRequest):
+    """Process natural language query and return results"""
     try:
-        schema = await get_database_schema()
-        
-        if uri == "db://schema":
-            return json.dumps(schema, indent=2)
-        
-        if uri.startswith("db://table/"):
-            table_name = uri.replace("db://table/", "")
-            
-            # Find the table in schema
-            table_info = None
-            for table in schema["tables"]:
-                if table["name"] == table_name:
-                    table_info = table
-                    break
-            
-            if not table_info:
-                raise RuntimeError(f"Table {table_name} not found")
-            
-            return json.dumps(table_info, indent=2)
-        
-        raise RuntimeError(f"Unknown resource URI: {uri}")
-    
-    except Exception as e:
-        logger.error(f"Error reading resource {uri}: {e}")
-        raise RuntimeError(f"Error reading resource: {str(e)}")
-
-@server.list_tools()
-async def handle_list_tools() -> list[types.Tool]:
-    """List available tools"""
-    return [
-        types.Tool(
-            name="query_database",
-            description="Execute a natural language query against the database",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "Natural language question to convert to SQL and execute"
-                    }
-                },
-                "required": ["question"]
-            }
-        )
-    ]
-
-@server.call_tool()
-async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    """Handle tool calls"""
-    if name != "query_database":
-        raise RuntimeError(f"Unknown tool: {name}")
-    
-    if "question" not in arguments:
-        raise RuntimeError("Missing required argument: question")
-    
-    question = arguments["question"]
-    
-    try:
-        logger.info(f"Processing query: {question}")
+        logger.info(f"Processing query: {request.question}")
 
         # Get database schema
         schema = await get_database_schema()
 
         # Generate SQL query
-        sql_query = await generate_sql_query(question, schema)
+        sql_query = await generate_sql_query(request.question, schema)
         logger.info(f"Generated SQL: {sql_query}")
 
         # Execute query
@@ -527,48 +476,50 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
         logger.info(f"Query returned {len(results)} rows")
 
         # Generate explanation
-        explanation = await generate_explanation(question, sql_query, results)
+        explanation = await generate_explanation(request.question, sql_query, results)
 
-        # Format response for MCP
-        response_text = f"""SQL Query: {sql_query}
-
-Results ({len(results)} rows):
-{json.dumps(results, indent=2)}
-
-Explanation: {explanation}"""
-
-        return [
-            types.TextContent(
-                type="text",
-                text=response_text
-            )
-        ]
-
-    except Exception as e:
-        logger.error(f"Error processing query: {e}")
-        return [
-            types.TextContent(
-                type="text", 
-                text=f"Error processing query '{question}': {str(e)}"
-            )
-        ]
-
-async def main():
-    """Main function to run the MCP server"""
-    # Run the server using stdio transport
-    async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name="ai-insights-mcp",
-                server_version="1.0.0",
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={},
-                ),
-            ),
+        response = QueryResponse(
+            sql_query=sql_query,
+            results=results,
+            explanation=explanation,
+            metadata={
+                "timestamp": datetime.now().isoformat(),
+                "row_count": len(results),
+                "question": request.question
+            }
         )
 
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error processing query: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/debug/ollama")
+async def debug_ollama():
+    """Debug endpoint to check Ollama status"""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Check if Ollama is running
+            health_response = await client.get(f"{OLLAMA_URL}/api/tags")
+            models = health_response.json()
+            
+            return {
+                "ollama_url": OLLAMA_URL,
+                "status": "healthy",
+                "models": models.get("models", []),
+                "response_status": health_response.status_code
+            }
+    except Exception as e:
+        return {
+            "ollama_url": OLLAMA_URL,
+            "status": "unhealthy",
+            "error": str(e),
+            "suggestion": "Make sure Ollama is running with: docker-compose up ollama"
+        }
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8001, log_level="info")
