@@ -1,0 +1,33 @@
+This architecture diagram shows your complete AI Insights Platform with clear highlighting of where MCP (Model Context Protocol) is applied. Here are the key architectural components:
+MCP Integration Points:
+
+Claude Desktop → MCP Server: The main MCP integration enabling Claude Desktop to directly access your database through natural language
+MCP Protocol: Standardized communication between Claude and your backend services
+MCP Server (port 8001): Your custom MCP server that handles NL→SQL conversion and query execution
+
+Service Architecture:
+Client Layer:
+
+Web Interface (Express.js, port 3000): Browser-based query interface
+Claude Desktop: Native MCP client for seamless AI integration
+
+Service Layer:
+
+MCP Server (port 8001): Core service handling Claude Desktop integration
+Analytics Service (port 8002): Column-specific insights and trend analysis
+Query Service (port 8000): Legacy FastAPI service
+
+AI & Data Layers:
+
+Ollama (port 11434): Local Llama 3.1 8B for privacy-focused AI
+PostgreSQL (port 5432): Business data storage
+
+Key Benefits Highlighted:
+
+MCP enables direct Claude Desktop integration - no need for web browser
+Microservices architecture - each component is containerized and scalable
+Local AI processing - data privacy with on-premise Ollama
+Advanced analytics - column-specific insights with trend/anomaly detection
+Dual interfaces - both web UI and native Claude Desktop support
+
+The diagram clearly shows how MCP creates a seamless bridge between Claude Desktop and your database, enabling natural language queries with sophisticated analytics - all while keeping your data local and secure!

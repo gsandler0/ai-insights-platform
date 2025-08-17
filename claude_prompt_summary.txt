@@ -1,0 +1,139 @@
+# AI Insights Platform - Analytics Integration Context
+
+## Project Overview
+I'm working on an AI-powered analytics platform that converts natural language queries to SQL and provides advanced analytics capabilities to analyze result trends and anomalies.
+
+## Current Architecture
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Query Client  │    │  Analytics API  │    │  Analysis AI    │
+│  (Web/Claude)   │◄──►│   (FastAPI)     │◄──►│   (Ollama)      │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                              │
+                       ┌─────────────────┐
+                       │   PostgreSQL    │
+                       │ (Results Cache) │
+                       └─────────────────┘
+```
+
+## Codebase Structure
+```
+├── server.js              # Express web server with analytics integration
+├── mcp-server.py          # MCP server for Claude Desktop 
+├── analytics/             # Analytics microservice
+│   ├── analyzer.py        # FastAPI analytics service
+│   ├── __init__.py
+│   └── Dockerfile
+├── docker-compose.yml     # Multi-container orchestration
+├── public/                # Web frontend
+│   └── index.html         # Enhanced UI with analytics display
+├── mcp/                   # MCP server files
+└── database/              # PostgreSQL setup
+```
+
+## ✅ COMPLETED FEATURES
+
+### Core Analytics Engine
+- **FastAPI analytics service** running on port 8002
+- **Data profiling** with automatic type detection (time-series, numerical, categorical)
+- **Multi-analyzer system**:
+  - Quality Analyzer: Missing data, duplicates, low diversity detection
+  - Trend Analyzer: Upward/downward trends, variability analysis
+  - Anomaly Analyzer: Outlier detection using IQR method, rare value identification
+- **Structured insights** with severity levels (info, warning, critical, opportunity)
+
+### Web Interface Integration  
+- **"Analyze Results" button** integrated into query results tables
+- **Express API endpoint** `/api/analyze` with proper request/response transformation
+- **Enhanced UI display** showing:
+  - 📊 Data profile (type, row count, columns)
+  - 🔍 Detailed insights with specific values (outliers: 10,000, 12,000)
+  - 📈 Trend analysis with strength percentages
+  - 📋 Data quality metrics with affected record counts
+  - 🎯 Column-specific information with visual indicators
+- **Interactive features**: Show/hide analysis, loading states, error handling
+- **Responsive design** with severity-based color coding and icons
+
+### Analytics Capabilities Demonstrated
+```
+Example Output:
+📋 Summary: Analysis of 20 rows revealed: • 1 trend patterns identified • 2 anomalies detected
+
+🔍 Key Insights:
+🟢 Column: id - Upward Trend in id: Strong upward trend detected (100% of periods increasing)
+🔵 Column: quantity - Outliers Detected: 1 outlier values found (5.0% of data)
+   🎯 Outlier Values: 15
+🔵 Column: total_amount - Outliers Detected: 2 outlier values found (10.0% of data)  
+   🎯 Outlier Values: 10,000, 12,000
+   📏 Normal Range: 2,400.00 to 6,000.00
+```
+
+## 🚧 NEXT PRIORITIES
+
+### MCP Integration (HIGH PRIORITY)
+- **Add analytics tools to `mcp-server.py`**:
+  - `analyze_query_results` - Analyzes the last query results  
+  - `analyze_data` - Analyzes any provided dataset
+- **Enable Claude Desktop workflow**: "run query" → "analyze these results"
+
+### Advanced Analytics Features
+- **Time series analysis** with seasonal pattern detection
+- **Correlation analysis** between numerical columns
+- **Statistical significance testing** for detected patterns
+- **Predictive insights** and recommendations
+
+## 📁 KEY FILES
+
+### Recently Updated
+- `server.js` - Enhanced with analytics integration and trust proxy fix
+- `public/index.html` - Enhanced analytics display with detailed insights
+- `analytics/analyzer.py` - Complete analytics engine with multiple analyzers
+
+### Configuration
+- `docker-compose.yml` - Multi-container setup with analytics service
+- Analytics service endpoint: `http://analytics:8002/analyze`
+
+## 🔗 Repository
+**GitHub**: https://github.com/gsandler0/ai-insights-platform.git
+"Current Branch: main (analytics integration completed and merged)"
+
+## 🛠️ TECHNICAL DETAILS
+
+### Analytics Request Format
+```json
+{
+  "query": "show me 20 transactions",
+  "sql": "SELECT * FROM sales_data ORDER BY transaction_date DESC LIMIT 20",
+  "results": [
+    {"id": 1, "total_amount": "10000.00", "quantity": 2, ...},
+    ...
+  ]
+}
+```
+
+### Analytics Response Format
+```json
+{
+  "insights": [
+    {
+      "type": "anomaly",
+      "title": "Outliers Detected in total_amount", 
+      "description": "2 outlier values found (10.0% of data)",
+      "severity": "info",
+      "data": {
+        "column": "total_amount",
+        "outliers": [10000, 12000],
+        "normal_range": {"lower": 2400.00, "upper": 6000.00}
+      }
+    }
+  ],
+  "data_type": "time_series",
+  "summary": "Analysis of 20 rows revealed: • 1 trend patterns • 2 anomalies"
+}
+```
+
+## 🏃‍♂️ CURRENT STATUS
+**READY FOR**: MCP integration to enable Claude Desktop analytics workflows. All core analytics functionality is working and tested. Web interface provides rich, detailed insights with specific values and actionable information.
+
+---
+*Continue from here with MCP server integration or advanced analytics features.*

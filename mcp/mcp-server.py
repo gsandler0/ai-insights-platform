@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://insights_user:insights_password_2024@postgres:5432/insights_db")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
+ANALYTICS_URL = os.getenv("ANALYTICS_URL", "http://analytics:8002")
 
 # Initialize MCP Server
 server = Server("ai-insights-mcp")
@@ -39,6 +40,183 @@ try:
 except Exception as e:
     logger.error(f"Failed to connect to database: {e}")
     raise
+
+# ANALYTICS INTEGRATION: Store last query results for analysis
+_last_query_results = None
+_last_query_context = None
+
+def store_query_results(question: str, sql_query: str, results: List[Dict[str, Any]]):
+    """Store the last query results for analytics"""
+    global _last_query_results, _last_query_context
+    _last_query_results = results
+    _last_query_context = {
+        "question": question,
+        "sql_query": sql_query,
+        "timestamp": datetime.now().isoformat(),
+        "row_count": len(results)
+    }
+    logger.info(f"Stored {len(results)} rows for analytics")
+
+async def call_analytics_service(query: str, sql: str, results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Call the analytics service to analyze data"""
+    try:
+        analytics_request = {
+            "query": query,
+            "sql": sql,
+            "results": results
+        }
+        
+        logger.info(f"Calling analytics service with {len(results)} rows")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{ANALYTICS_URL}/analyze",
+                json=analytics_request,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"Analytics service error: {response.status_code} - {error_text}")
+                raise RuntimeError(f"Analytics service error: {response.status_code}")
+            
+            analytics_result = response.json()
+            logger.info(f"Analytics completed: {len(analytics_result.get('insights', []))} insights generated")
+            return analytics_result
+            
+    except httpx.ConnectError as e:
+        logger.error(f"Cannot connect to analytics service: {e}")
+        raise RuntimeError("Analytics service is unavailable. Please ensure it's running.")
+    except httpx.TimeoutException as e:
+        logger.error(f"Analytics service timeout: {e}")
+        raise RuntimeError("Analytics service timeout. The analysis is taking too long.")
+    except Exception as e:
+        logger.error(f"Unexpected analytics error: {e}")
+        raise RuntimeError(f"Analytics error: {str(e)}")
+
+def format_results_as_table(results: List[Dict[str, Any]], max_rows: int = 20) -> str:
+    """Format query results as a readable table for MCP"""
+    if not results:
+        return "No results found."
+    
+    # Limit rows for readability
+    display_results = results[:max_rows]
+    
+    # Get all column names
+    columns = list(results[0].keys())
+    
+    # Calculate column widths
+    col_widths = {}
+    for col in columns:
+        col_widths[col] = max(
+            len(str(col)),
+            max(len(str(row.get(col, ''))) for row in display_results)
+        )
+        # Cap width at 20 characters for readability
+        col_widths[col] = min(col_widths[col], 20)
+    
+    # Build table
+    table_lines = []
+    
+    # Header
+    header = "| " + " | ".join(str(col).ljust(col_widths[col]) for col in columns) + " |"
+    table_lines.append(header)
+    
+    # Separator
+    separator = "|-" + "-|-".join("-" * col_widths[col] for col in columns) + "-|"
+    table_lines.append(separator)
+    
+    # Data rows
+    for row in display_results:
+        row_values = []
+        for col in columns:
+            value = str(row.get(col, ''))
+            # Truncate long values
+            if len(value) > 20:
+                value = value[:17] + "..."
+            row_values.append(value.ljust(col_widths[col]))
+        
+        row_line = "| " + " | ".join(row_values) + " |"
+        table_lines.append(row_line)
+    
+    table_str = "\n".join(table_lines)
+    
+    # Add summary if truncated
+    if len(results) > max_rows:
+        table_str += f"\n\n... and {len(results) - max_rows} more rows"
+    
+    return f"```\n{table_str}\n```"
+
+def format_analytics_response(analytics_result: Dict[str, Any]) -> str:
+    """Format analytics results for MCP response"""
+    response_lines = []
+    
+    # Add summary
+    if analytics_result.get("summary"):
+        response_lines.append(f"📊 **Analysis Summary**")
+        response_lines.append(analytics_result["summary"])
+        response_lines.append("")
+    
+    # Add data profile
+    if analytics_result.get("data_type"):
+        data_profile = analytics_result.get("metadata", {}).get("data_profile", {})
+        response_lines.append(f"📋 **Data Profile**")
+        response_lines.append(f"- Data Type: {analytics_result['data_type']}")
+        response_lines.append(f"- Rows Analyzed: {data_profile.get('row_count', 'Unknown')}")
+        response_lines.append(f"- Columns: {data_profile.get('column_count', 'Unknown')}")
+        response_lines.append("")
+    
+    # Add insights
+    insights = analytics_result.get("insights", [])
+    if insights:
+        response_lines.append(f"🔍 **Key Insights** ({len(insights)} found)")
+        
+        for i, insight in enumerate(insights, 1):
+            severity_icons = {
+                'critical': '🔴',
+                'warning': '🟡', 
+                'info': '🔵',
+                'opportunity': '🟢'
+            }
+            icon = severity_icons.get(insight.get('severity', 'info'), 'ℹ️')
+            
+            response_lines.append(f"{i}. {icon} **{insight.get('title', 'Insight')}**")
+            response_lines.append(f"   {insight.get('description', 'No description')}")
+            
+            # Add specific details if available
+            data = insight.get('data', {})
+            if data:
+                if data.get('column'):
+                    response_lines.append(f"   📍 Column: {data['column']}")
+                
+                # Outlier details
+                if data.get('outliers'):
+                    outlier_values = [str(v) for v in data['outliers']]
+                    response_lines.append(f"   🎯 Outlier Values: {', '.join(outlier_values)}")
+                
+                if data.get('normal_range'):
+                    nr = data['normal_range']
+                    response_lines.append(f"   📏 Normal Range: {nr.get('lower', 'N/A'):.2f} to {nr.get('upper', 'N/A'):.2f}")
+                
+                # Trend details
+                if data.get('trend') and data.get('strength'):
+                    trend_icon = '📈' if data['trend'] == 'increasing' else '📉'
+                    response_lines.append(f"   {trend_icon} Trend: {data['trend']} ({data['strength']:.1f}% strength)")
+                
+                # Data quality details
+                if data.get('affected_records'):
+                    response_lines.append(f"   📋 Affected Records: {data['affected_records']}")
+                
+                if data.get('null_percentage'):
+                    response_lines.append(f"   ❌ Missing Data: {data['null_percentage']:.1f}%")
+            
+            response_lines.append("")
+    else:
+        response_lines.append("✅ **No Issues Found**")
+        response_lines.append("Your data looks good! No significant patterns or issues were detected.")
+        response_lines.append("")
+    
+    return "\n".join(response_lines)
 
 # Pydantic models (keeping for internal use)
 class QueryRequest(BaseModel):
@@ -195,7 +373,7 @@ You are a SQL expert. Convert the question into a proper PostgreSQL query.
 - Return ONLY the SQL query, no explanations
 - Use proper JOINs when data is in multiple tables
 - Use SUM(), COUNT(), GROUP BY for aggregations
-- Always add LIMIT 5 at the end
+- Always add LIMIT 50 at the end
 - Use table aliases (c for customers, s for sales_data, etc.)
 
 ### Database Schema:
@@ -203,13 +381,13 @@ You are a SQL expert. Convert the question into a proper PostgreSQL query.
 
 ### Examples:
 Question: "What are the total sales by customer?"
-Answer: SELECT c.customer_name, SUM(s.amount) as total_sales FROM customers c JOIN sales_data s ON c.customer_id = s.customer_id GROUP BY c.customer_id, c.customer_name ORDER BY total_sales DESC LIMIT 5;
+Answer: SELECT c.customer_name, SUM(s.amount) as total_sales FROM customers c JOIN sales_data s ON c.customer_id = s.customer_id GROUP BY c.customer_id, c.customer_name ORDER BY total_sales DESC LIMIT 50;
 
 Question: "Show me customers"
-Answer: SELECT * FROM customers LIMIT 5;
+Answer: SELECT * FROM customers LIMIT 50;
 
 Question: "Which products sell the most?"
-Answer: SELECT p.product_name, SUM(s.quantity) as total_sold FROM products p JOIN sales_data s ON p.product_name = s.product_name GROUP BY p.product_name ORDER BY total_sold DESC LIMIT 5;
+Answer: SELECT p.product_name, SUM(s.quantity) as total_sold FROM products p JOIN sales_data s ON p.product_name = s.product_name GROUP BY p.product_name ORDER BY total_sold DESC LIMIT 50;
 
 ### Your Task:
 Question: "{question}"
@@ -357,7 +535,7 @@ def generate_fallback_query(question: str, schema: Dict[str, Any]) -> str:
     best_table = max(table_scores.items(), key=lambda x: x[1])[0] if table_scores else schema["tables"][0]["name"]
     
     # Generate simple SELECT query
-    return f"SELECT * FROM {best_table} LIMIT 5;"
+    return f"SELECT * FROM {best_table} LIMIT 50;"
 
 async def execute_sql_query(sql_query: str) -> List[Dict[str, Any]]:
     """Execute SQL query safely - UNCHANGED except HTTPException -> RuntimeError"""
@@ -483,7 +661,7 @@ async def handle_read_resource(uri: str) -> str:
 
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
-    """List available tools"""
+    """List available tools - ENHANCED with analytics tools"""
     return [
         types.Tool(
             name="query_database",
@@ -498,60 +676,210 @@ async def handle_list_tools() -> list[types.Tool]:
                 },
                 "required": ["question"]
             }
+        ),
+        types.Tool(
+            name="analyze_query_results",
+            description="Analyze the results from the last database query for trends, anomalies, and data quality issues",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": ["auto", "trends", "anomalies", "quality", "opportunities"],
+                        "description": "Type of analysis to perform (default: auto for comprehensive analysis)",
+                        "default": "auto"
+                    }
+                },
+                "required": []
+            }
+        ),
+        types.Tool(
+            name="analyze_data",
+            description="Analyze any dataset for insights, trends, and anomalies",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "description": "Array of data objects to analyze",
+                        "items": {
+                            "type": "object"
+                        }
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of the dataset being analyzed",
+                        "default": "Custom dataset analysis"
+                    },
+                    "analysis_type": {
+                        "type": "string",
+                        "enum": ["auto", "trends", "anomalies", "quality", "opportunities"],
+                        "description": "Type of analysis to perform (default: auto)",
+                        "default": "auto"
+                    }
+                },
+                "required": ["data"]
+            }
         )
     ]
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    """Handle tool calls"""
-    if name != "query_database":
+    """Handle tool calls - ENHANCED with analytics tools"""
+    
+    if name == "query_database":
+        if "question" not in arguments:
+            raise RuntimeError("Missing required argument: question")
+        
+        question = arguments["question"]
+        
+        try:
+            logger.info(f"Processing query: {question}")
+
+            # Get database schema
+            schema = await get_database_schema()
+
+            # Generate SQL query
+            sql_query = await generate_sql_query(question, schema)
+            logger.info(f"Generated SQL: {sql_query}")
+
+            # Execute query
+            results = await execute_sql_query(sql_query)
+            logger.info(f"Query returned {len(results)} rows")
+
+            # ANALYTICS INTEGRATION: Store results for analysis
+            store_query_results(question, sql_query, results)
+
+            # Generate explanation
+            explanation = await generate_explanation(question, sql_query, results)
+
+            # Format response for MCP with readable table
+            response_text = f"""**SQL Query**: {sql_query}
+
+**Results ({len(results)} rows):**
+
+{format_results_as_table(results)}
+
+**Explanation**: {explanation}
+
+💡 **Tip**: Use the `analyze_query_results` tool to get insights about this data!"""
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=response_text
+                )
+            ]
+
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return [
+                types.TextContent(
+                    type="text", 
+                    text=f"Error processing query '{question}': {str(e)}"
+                )
+            ]
+    
+    elif name == "analyze_query_results":
+        global _last_query_results, _last_query_context
+        
+        if _last_query_results is None:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="No query results available for analysis. Please run a database query first using the `query_database` tool."
+                )
+            ]
+        
+        try:
+            analysis_type = arguments.get("analysis_type", "auto")
+            
+            logger.info(f"Analyzing last query results: {len(_last_query_results)} rows")
+            
+            # Call analytics service
+            analytics_result = await call_analytics_service(
+                _last_query_context["question"],
+                _last_query_context["sql_query"], 
+                _last_query_results
+            )
+            
+            # Format response
+            response_text = f"""📊 **Analysis of Last Query Results**
+
+**Original Query**: {_last_query_context["question"]}
+**SQL**: {_last_query_context["sql_query"]}
+**Analyzed**: {len(_last_query_results)} rows
+
+{format_analytics_response(analytics_result)}"""
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=response_text
+                )
+            ]
+            
+        except Exception as e:
+            logger.error(f"Error analyzing query results: {e}")
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Error analyzing query results: {str(e)}"
+                )
+            ]
+    
+    elif name == "analyze_data":
+        if "data" not in arguments:
+            raise RuntimeError("Missing required argument: data")
+        
+        data = arguments["data"]
+        description = arguments.get("description", "Custom dataset analysis")
+        analysis_type = arguments.get("analysis_type", "auto")
+        
+        if not isinstance(data, list) or len(data) == 0:
+            return [
+                types.TextContent(
+                    type="text",
+                    text="Invalid data provided. Please provide a non-empty array of data objects."
+                )
+            ]
+        
+        try:
+            logger.info(f"Analyzing custom dataset: {len(data)} rows")
+            
+            # Call analytics service
+            analytics_result = await call_analytics_service(
+                description,
+                "Custom data analysis",
+                data
+            )
+            
+            # Format response
+            response_text = f"""📊 **Custom Data Analysis**
+
+**Dataset**: {description}
+**Rows Analyzed**: {len(data)}
+
+{format_analytics_response(analytics_result)}"""
+
+            return [
+                types.TextContent(
+                    type="text",
+                    text=response_text
+                )
+            ]
+            
+        except Exception as e:
+            logger.error(f"Error analyzing custom data: {e}")
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Error analyzing data: {str(e)}"
+                )
+            ]
+    
+    else:
         raise RuntimeError(f"Unknown tool: {name}")
-    
-    if "question" not in arguments:
-        raise RuntimeError("Missing required argument: question")
-    
-    question = arguments["question"]
-    
-    try:
-        logger.info(f"Processing query: {question}")
-
-        # Get database schema
-        schema = await get_database_schema()
-
-        # Generate SQL query
-        sql_query = await generate_sql_query(question, schema)
-        logger.info(f"Generated SQL: {sql_query}")
-
-        # Execute query
-        results = await execute_sql_query(sql_query)
-        logger.info(f"Query returned {len(results)} rows")
-
-        # Generate explanation
-        explanation = await generate_explanation(question, sql_query, results)
-
-        # Format response for MCP
-        response_text = f"""SQL Query: {sql_query}
-
-Results ({len(results)} rows):
-{json.dumps(results, indent=2)}
-
-Explanation: {explanation}"""
-
-        return [
-            types.TextContent(
-                type="text",
-                text=response_text
-            )
-        ]
-
-    except Exception as e:
-        logger.error(f"Error processing query: {e}")
-        return [
-            types.TextContent(
-                type="text", 
-                text=f"Error processing query '{question}': {str(e)}"
-            )
-        ]
 
 async def main():
     """Main function to run the MCP server"""
