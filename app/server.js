@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 app.set('trust proxy', 1);
 
-const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8001';
+const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://query-server:8001';
 const ANALYTICS_URL = process.env.ANALYTICS_URL || 'http://analytics:8002';
 
 // Security middleware
@@ -67,7 +67,7 @@ app.post('/api/query', [
         const { question } = req.body;
         console.log(`Processing query: ${question}`);
 
-        const response = await axios.post(`${MCP_SERVER_URL}/query`, {
+        const response = await axios.post(`${MCP_SERVER_URL}/api/query`, {
             question,
             context: {}
         }, {
@@ -95,7 +95,7 @@ app.post('/api/query', [
 
 app.get('/api/schema', async (req, res) => {
     try {
-        const response = await axios.get(`${MCP_SERVER_URL}/schema`, {
+        const response = await axios.get(`${MCP_SERVER_URL}/api/schema`, {
             timeout: 10000
         });
 

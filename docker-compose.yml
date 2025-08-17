@@ -70,14 +70,13 @@ services:
       context: ./mcp
       dockerfile: Dockerfile
     container_name: ai-insights-mcp
+    command: ["python", "mcp-server.py"]
     environment:
       - DATABASE_URL=postgresql://insights_user:insights_password_2024@postgres:5432/insights_db
       - OLLAMA_URL=http://ollama:11434
+      - ANALYTICS_URL=http://analytics:8002
     volumes:
       - app_logs:/app/logs
-    # REMOVED: HTTP port (MCP uses stdio)
-    # ports:
-    #   - "8001:8001"
     depends_on:
       postgres:
         condition: service_healthy
@@ -85,16 +84,37 @@ services:
         condition: service_started
     networks:
       - ai-insights-network
-    # REMOVED: HTTP health check (MCP doesn't use HTTP)
-    # healthcheck:
-    #   test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
-    #   interval: 10s
-    #   timeout: 5s
-    #   retries: 5
-    #   start_period: 30s
-    # ADD: MCP stdio support
     stdin_open: true
     tty: true
+    restart: unless-stopped
+  
+  query-server:
+    build:
+      context: ./mcp
+      dockerfile: Dockerfile
+    container_name: ai-insights-query
+    command: ["python", "server.py"]
+    environment:
+      - DATABASE_URL=postgresql://insights_user:insights_password_2024@postgres:5432/insights_db
+      - OLLAMA_URL=http://ollama:11434
+      - ANALYTICS_URL=http://analytics:8002
+    volumes:
+      - app_logs:/app/logs
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    networks:
+      - ai-insights-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   # Web App - NEEDS UPDATE if it depends on REST API
@@ -104,16 +124,16 @@ services:
       dockerfile: Dockerfile
     container_name: ai-insights-app
     environment:
-      # CHANGED: Can't use HTTP URL for MCP
-      # - MCP_SERVER_URL=http://mcp-server:8001
+      - MCP_SERVER_URL=http://query-server:8001
       - DATABASE_URL=postgresql://insights_user:insights_password_2024@postgres:5432/insights_db
     volumes:
       - app_logs:/app/logs
     ports:
       - "3000:3000"
     depends_on:
-      # CHANGED: MCP server dependency different
       postgres:
+        condition: service_healthy
+      query-server:
         condition: service_healthy
     networks:
       - ai-insights-network
@@ -161,3 +181,4 @@ volumes:
   postgres_data:
   ollama_data:
   app_logs:
+

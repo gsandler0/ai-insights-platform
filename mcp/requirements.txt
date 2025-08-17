@@ -1,23 +1,18 @@
-# MCP Server Dependencies
+# MCP Server Requirements
 mcp==1.0.0
 
-# Database Dependencies (UNCHANGED)
-psycopg2-binary==2.9.7
-sqlalchemy==2.0.23
+# Database
+psycopg2-binary>=2.9.7
+sqlalchemy>=2.0.23
 
-# HTTP Client for Ollama (UNCHANGED)
-httpx==0.25.2
+# HTTP
+httpx>=0.27
 
-# Data Models (UNCHANGED)
-pydantic==2.5.0
+# Utilities
+pydantic>=2.8.0
 
-# Logging (UNCHANGED)
-python-json-logger==2.0.7
-
-# Optional: Keep FastAPI for debugging/development
-# fastapi==0.104.1
-# uvicorn==0.24.0
-
-# Remove these (not needed for MCP):
-# python-multipart==0.0.6
-# jinja2==3.1.2
+# Logging
+python-json-logger>=2.0.7
+# FastAPI for HTTP server
+fastapi>=0.104.0
+uvicorn>=0.24.0
