@@ -10,6 +10,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MCP_SERVER_URL = process.env.MCP_SERVER_URL || 'http://mcp-server:8001';
+const ANALYTICS_URL = process.env.ANALYTICS_URL || 'http://analytics:8002';
 
 // Security middleware
 app.use(helmet({
@@ -62,21 +63,18 @@ app.post('/api/query', [
         }
 
         const { question } = req.body;
-        
         console.log(`Processing query: ${question}`);
-        
+
         const response = await axios.post(`${MCP_SERVER_URL}/query`, {
             question,
             context: {}
         }, {
             timeout: 30000
         });
-        
+
         res.json(response.data);
-        
     } catch (error) {
         console.error('Query error:', error.message);
-        
         if (error.response) {
             res.status(error.response.status).json({
                 error: error.response.data.detail || 'Server error'
@@ -98,12 +96,10 @@ app.get('/api/schema', async (req, res) => {
         const response = await axios.get(`${MCP_SERVER_URL}/schema`, {
             timeout: 10000
         });
-        
+
         res.json(response.data);
-        
     } catch (error) {
         console.error('Schema error:', error.message);
-        
         if (error.response) {
             res.status(error.response.status).json({
                 error: error.response.data.detail || 'Server error'
@@ -111,6 +107,63 @@ app.get('/api/schema', async (req, res) => {
         } else {
             res.status(500).json({
                 error: 'Could not retrieve database schema'
+            });
+        }
+    }
+});
+
+app.post('/api/analyze', [
+    body('data').isArray({ min: 1 }).withMessage('Data must be a non-empty array'),
+    body('query_context').optional().isString()
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({ errors: errors.array() });
+        }
+
+        const { data, query_context } = req.body;
+        console.log(`Processing analytics for ${data.length} rows`);
+
+        // Parse query context to extract query and SQL
+        let query = "Unknown query";
+        let sql = "Unknown SQL";
+        
+        if (query_context) {
+            const lines = query_context.split('\n');
+            const queryLine = lines.find(line => line.startsWith('Query: '));
+            const sqlLine = lines.find(line => line.startsWith('SQL: '));
+            
+            if (queryLine) query = queryLine.replace('Query: ', '');
+            if (sqlLine) sql = sqlLine.replace('SQL: ', '');
+        }
+
+        // Format data for analytics service
+        const analyticsRequest = {
+            query: query,
+            sql: sql,
+            results: data
+        };
+
+        const response = await axios.post(`${ANALYTICS_URL}/analyze`, analyticsRequest, {
+            timeout: 60000 // Analytics might take longer
+        });
+
+        res.json(response.data);
+    } catch (error) {
+        console.error('Analytics error:', error.message);
+        if (error.response) {
+            console.error('Analytics service response:', error.response.data);
+            res.status(error.response.status).json({
+                error: error.response.data.detail || 'Analytics service error'
+            });
+        } else if (error.code === 'ECONNREFUSED') {
+            res.status(503).json({
+                error: 'Analytics service is currently unavailable. Please try again later.'
+            });
+        } else {
+            res.status(500).json({
+                error: 'An unexpected error occurred during analysis. Please try again.'
             });
         }
     }
